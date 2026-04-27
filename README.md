@@ -6,6 +6,17 @@ A multi-page Streamlit dashboard applying BERT sentiment analysis, zero-shot top
 
 ---
 
+## Screenshots
+
+<img src="assets/landing_page.png" width="500"/>
+<img src="assets/eda.png" width="500"/><br>
+<img src="assets/sentiment.png" width="500"/>
+<img src="assets/clustering.png" width="500"/><br>
+<img src="assets/business_insights.png" width="500"/>
+<img src="assets/chatbot.png" width="500"/><br>
+
+---
+
 ## Pages
 
 | Page | What it shows |
@@ -31,7 +42,7 @@ A multi-page Streamlit dashboard applying BERT sentiment analysis, zero-shot top
 ## Running Locally
 
 ```bash
-git clone https://github.com/<you>/gcash-nlp-dashboard.git
+git clone https://github.com/airishchristian/gcash-nlp-dashboard.git
 cd gcash-nlp-dashboard
 uv sync
 echo "ANTHROPIC_API_KEY=your_key_here" > .env
