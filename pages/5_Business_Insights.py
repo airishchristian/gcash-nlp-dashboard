@@ -1,5 +1,7 @@
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
 from utils.data_loader import load_data
 
 st.set_page_config(
@@ -34,49 +36,57 @@ st.caption(f"Showing {len(df_filtered):,} of {len(df):,} reviews")
 
 st.markdown("---")
 
-# ── Q1: Topics driving most negative sentiment ────────────────────────────────
-st.subheader("Q1 · Which topics drive the most negative sentiment?")
-st.caption("The longer the red bar, the bigger the product pain point.")
+# ── Q1: Which topics drive the most negative sentiment ────────────────────────
+st.subheader("Q1 · Which topics drive the MOST negative sentiment?")
+st.caption("Top topics are the biggest pain points. Sorted by % of 1-star reviews.")
 
-ct = (
+topic_sentiment = (
     df_filtered
-    .groupby(["topic", "sentiment_meaning"])
+    .groupby(["topic", "sentiment"])
     .size()
     .reset_index(name="count")
-    .sort_index()
 )
+topic_total = df_filtered.groupby("topic").size().reset_index(name="total")
+topic_sentiment = topic_sentiment.merge(topic_total, on="topic")
+topic_sentiment["pct"] = topic_sentiment["count"] / topic_sentiment["total"] * 100
+
+# Sort topics by % of 1-star reviews descending (matches notebook sort_values by='1 star')
+one_star_order = (
+    topic_sentiment[topic_sentiment["sentiment"] == "1 star"]
+    .sort_values("pct", ascending=False)["topic"]
+    .tolist()
+)
+
 fig1 = px.bar(
-    ct,
-    x="count",
+    topic_sentiment,
+    x="pct",
     y="topic",
-    color="sentiment_meaning",
+    color="sentiment",
     orientation="h",
     barmode="stack",
-    category_orders={"sentiment_meaning": SENTIMENT_ORDER},
-    color_discrete_sequence=[
-        "#d62728", "#ff7f0e", "#bcbd22", "#2ca02c", "#1f77b4"
-    ],
-    labels={"count": "Reviews", "topic": "",
-            "sentiment_meaning": "Sentiment"},
+    category_orders={"topic": one_star_order},
+    labels={"pct": "Percentage of Reviews (%)", "topic": "", "sentiment": "Sentiment"},
 )
 fig1.update_layout(yaxis=dict(autorange="reversed"))
 st.plotly_chart(fig1, use_container_width=True)
 
-# key finding callout
-worst_topic = (
-    df_filtered[df_filtered["sentiment_meaning"]
-                .isin(["Very negative", "Negative"])]
-    .groupby("topic")
-    .size()
-    .idxmax()
+# Topics ranked by % of 1-star reviews (matches notebook print output)
+st.markdown("**Topics ranked by percent of 1-star reviews:**")
+one_star_table = (
+    topic_sentiment[topic_sentiment["sentiment"] == "1 star"]
+    [["topic", "pct"]]
+    .sort_values("pct", ascending=False)
+    .rename(columns={"topic": "Topic", "pct": "1-Star Reviews (%)"})
+    .set_index("Topic")
+    .round(2)
 )
-st.error(f"Biggest pain point: **{worst_topic}**")
+st.dataframe(one_star_table, use_container_width=True)
 
 st.markdown("---")
 
 # ── Q2: Topics with lowest avg star rating ────────────────────────────────────
 st.subheader("Q2 · Which topics have the lowest average star rating?")
-st.caption("Confirms Q1 from a different angle using the user's own numeric score.")
+st.caption("Confirms Q1 from a different angle using the user's actual numeric rating.")
 
 avg = (
     df_filtered
@@ -84,69 +94,50 @@ avg = (
     .agg(
         avg_rating=("review_rating", "mean"),
         n_reviews=("review_rating", "count"),
+        avg_sentiment_score=("sentiment_score", "mean"),
     )
-    .sort_values("avg_rating")
+    .sort_values("avg_rating", ascending=False)
     .reset_index()
+    .round(2)
 )
-fig2 = px.bar(
-    avg,
-    x="avg_rating",
-    y="topic",
-    orientation="h",
-    color="avg_rating",
-    color_continuous_scale="RdYlGn",
-    labels={"avg_rating": "Avg ★", "topic": ""},
-    text=avg["avg_rating"].round(2),
-)
-fig2.update_layout(
-    yaxis=dict(autorange="reversed"),
-    coloraxis_showscale=False,
-)
-st.plotly_chart(fig2, use_container_width=True)
+st.dataframe(avg.set_index("topic"), use_container_width=True)
 
 st.markdown("---")
 
 # ── Q3: Cluster profiles ──────────────────────────────────────────────────────
-st.subheader("Q3 · Who are the customer segments?")
+st.subheader("Q3 · Cluster profiles — who are these customer segments?")
 st.caption(
-    "Long reviews + low ratings = vocal dissatisfied users. "
-    "Short reviews + high ratings = satisfied casual users."
+    "A cluster of frustrated long-review writers needs different treatment "
+    "than a cluster of casual one-liner reviewers."
 )
 
-profile = (
-    df_filtered
-    .groupby("cluster")
-    .agg(
-        avg_rating=("review_rating", "mean"),
-        avg_length=("review_length", "mean"),
-        avg_sentiment=("sentiment_score", "mean"),
-        n_reviews=("review_rating", "count"),
-    )
-    .round(2)
-)
-profile["dominant_sentiment"] = (
-    df_filtered.groupby("cluster")["sentiment_meaning"]
-    .agg(lambda x: x.mode()[0])
-)
-profile["top_topic"] = (
-    df_filtered.groupby("cluster")["topic"]
-    .agg(lambda x: x.mode()[0])
-)
-
-st.dataframe(profile, use_container_width=True)
+for cluster_id in sorted(df_filtered["cluster"].unique()):
+    cluster_df = df_filtered[df_filtered["cluster"] == cluster_id]
+    pct = len(cluster_df) / len(df_filtered) * 100
+    with st.expander(f"Cluster {cluster_id} — {len(cluster_df):,} reviews ({pct:.1f}%)"):
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Avg Rating", f"{cluster_df['review_rating'].mean():.2f} ★")
+        col2.metric("Avg Sentiment Score", f"{cluster_df['sentiment_score'].mean():.2f}")
+        col3.metric("Avg Review Length", f"{cluster_df['review_length'].mean():.0f} chars")
+        st.write(f"**Dominant sentiment:** {cluster_df['sentiment'].mode()[0]}")
+        st.write(f"**Top topic:** {cluster_df['topic'].mode()[0]}")
 
 st.markdown("---")
 
 # ── Q4: Sentiment over time ───────────────────────────────────────────────────
-st.subheader("Q4 · Is sentiment improving or getting worse over time?")
-st.caption("Watch for dips after major app releases or incidents.")
+st.subheader("Q4 · Time trends — is sentiment improving or getting worse?")
+st.caption("After a product change or incident, did customer sentiment shift?")
+
+df_filtered = df_filtered.copy()
+df_filtered["year_month"] = pd.to_datetime(df_filtered["review_datetime_utc"]).dt.strftime('%Y-%m')
 
 monthly = (
     df_filtered
     .groupby("year_month")
     .agg(
         avg_rating=("review_rating", "mean"),
-        n_reviews=("review_rating", "count"),
+        avg_sentiment=("sentiment_score", "mean"),
+        n_reviews=("review_datetime_utc", "count"),
     )
     .reset_index()
 )
@@ -159,6 +150,7 @@ fig4 = px.line(
     markers=True,
     labels={"year_month": "Month", "avg_rating": "Avg Rating"},
     color_discrete_sequence=["#007dfe"],
+    title="GCash — Monthly Rating Trend",
 )
 fig4.add_hline(
     y=df_filtered["review_rating"].mean(),
@@ -179,8 +171,7 @@ valid_versions = version_counts[version_counts >= 5].index
 
 if len(valid_versions) > 0:
     version_stats = (
-        df_filtered[df_filtered["author_app_version"]
-                    .isin(valid_versions)]
+        df_filtered[df_filtered["author_app_version"].isin(valid_versions)]
         .groupby("author_app_version")
         .agg(
             avg_rating=("review_rating", "mean"),
@@ -189,7 +180,11 @@ if len(valid_versions) > 0:
         .sort_values("avg_rating")
         .head(15)
         .reset_index()
+        .round(2)
     )
+
+    print("Bottom 15 worst-rated app versions (min 5 reviews):\n")
+
     fig5 = px.bar(
         version_stats,
         x="avg_rating",
@@ -220,14 +215,18 @@ st.caption(
     "regardless of their assigned label."
 )
 
-c1, c2 = st.columns(2)
+TOPIC_THRESHOLD = 0.65
+SENTIMENT_THRESHOLD = 0.65
 
+uncertain_topic = df_filtered[df_filtered["topic_confidence"] < TOPIC_THRESHOLD]
+uncertain_sentiment = df_filtered[df_filtered["sentiment_score"] < SENTIMENT_THRESHOLD]
+
+c1, c2 = st.columns(2)
 with c1:
-    uncertain = df_filtered[df_filtered["topic_confidence"] < 0.65]
     st.metric(
         "Low-confidence topic classifications",
-        f"{len(uncertain):,}",
-        f"{len(uncertain)/len(df_filtered)*100:.1f}% of reviews",
+        f"{len(uncertain_topic):,}",
+        f"{len(uncertain_topic)/len(df_filtered)*100:.1f}% of reviews",
     )
     st.caption(
         "These reviews had weak signal for all 8 topics. "
@@ -235,15 +234,49 @@ with c1:
     )
 
 with c2:
-    low_sentiment = df_filtered[df_filtered["sentiment_score"] < 0.65]
     st.metric(
         "Uncertain sentiment classifications",
-        f"{len(low_sentiment):,}",
-        f"{len(low_sentiment)/len(df_filtered)*100:.1f}% of reviews",
+        f"{len(uncertain_sentiment):,}",
+        f"{len(uncertain_sentiment)/len(df_filtered)*100:.1f}% of reviews",
     )
     st.caption(
         "Neutral tone, factual complaints, or Taglish sarcasm "
         "confuse the multilingual BERT model."
+    )
+
+# Confidence score distributions
+fig6a = px.histogram(
+    df_filtered, x="topic_confidence", nbins=30,
+    title="Topic Confidence Score Distribution",
+    labels={"topic_confidence": "Confidence"},
+    color_discrete_sequence=["#007dfe"],
+)
+fig6a.add_vline(x=TOPIC_THRESHOLD, line_dash="dash", line_color="red",
+                annotation_text=f"Threshold ({TOPIC_THRESHOLD})")
+
+fig6b = px.histogram(
+    df_filtered, x="sentiment_score", nbins=30,
+    title="Sentiment Confidence Score Distribution",
+    labels={"sentiment_score": "Confidence"},
+    color_discrete_sequence=["#ff7f0e"],
+)
+fig6b.add_vline(x=SENTIMENT_THRESHOLD, line_dash="dash", line_color="red",
+                annotation_text=f"Threshold ({SENTIMENT_THRESHOLD})")
+
+col1, col2 = st.columns(2)
+with col1:
+    st.plotly_chart(fig6a, use_container_width=True)
+with col2:
+    st.plotly_chart(fig6b, use_container_width=True)
+
+# Sample low-confidence reviews for manual inspection
+with st.expander("🔍 Sample low-confidence topic reviews (manual inspection)"):
+    st.dataframe(
+        uncertain_topic[["review_text", "topic", "topic_confidence", "sentiment_meaning"]]
+        .sort_values("topic_confidence")
+        .head(10)
+        .reset_index(drop=True),
+        use_container_width=True,
     )
 
 st.markdown("---")
@@ -251,13 +284,24 @@ st.markdown("---")
 # ── Recommendations ───────────────────────────────────────────────────────────
 st.subheader("Recommendations")
 
-st.success(f"Fix first: **{worst_topic}** — highest volume of negative reviews.")
+worst_topic = (
+    df_filtered[df_filtered["sentiment"].isin(["1 star", "2 stars"])]
+    .groupby("topic")
+    .size()
+    .idxmax()
+)
+
+st.error(f"🔴 **Fix first:** {worst_topic} — highest volume of negative reviews.")
 st.warning(
-    "Monitor monthly rating trend — any dip below the overall "
+    "🟡 **Monitor** monthly rating trend — any dip below the overall "
     "average after a release is a signal to investigate."
 )
 st.info(
-    "Segment your response strategy by cluster — "
+    "🔵 **Segment** your response strategy by cluster — "
     "long frustrated reviews need detailed support responses, "
     "not templated replies."
+)
+st.write(
+    "⚪ **Improve model** — low-confidence reviews need manual labelling "
+    "or an expanded topic taxonomy."
 )
